@@ -1016,7 +1016,7 @@ const store = {
 };
 
 /* ---------- config ---------- */
-const BUILD = 'v27.2';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
+const BUILD = 'v27.3';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
 const DEFAULT_IDS = [1344396, 1342410, 1344728, 1340238, 1344398];
 /* closed positions that moved to a new NFT — migrate stored pins once */
 const REPOSITIONED = {1338795: 1344396, 1339457: 1344398, 1340170: 1344728};
@@ -5057,11 +5057,24 @@ function renderCompetition(host){
   const arenas=C.arenas.filter(a=>a && a.mine && a.mine.length);
   if(!arenas.length) return;
   let cur=arenas.find(a=>a.key===cfg.arena) || arenas[0];
+  /* LCX on the old contract and LCX on the new one are two different ERC-20s with two separate
+     markets, so they are two arenas — and they would otherwise both be labelled "LCX on ETH",
+     which is the sort of tab that makes a reader distrust the whole panel. Named from the same
+     deployment-date badge the cards and the contract comparison already use. */
+  /* Only a contract-era badge names an arena. The same badge slot carries a fee tier on Solana,
+     and a tier belongs to one pool, not to the token's whole market — labelling the CPOOL arena
+     "CPOOL 4%" would be wrong the moment it also contains the 1% pool, which it does. */
+  const arenaBadge=a=>{ const id=(a.mine||[]).flatMap(m=>m.ids||[])[0];
+                        const bg=id ? (poolBadge.get(String(id))||null) : null;
+                        return (bg && /^(OLD|NEW)\b/.test(bg)) ? bg : null; };
+  const arenaName=a=>{ const b=arenaBadge(a); return esc(a.sym)+(b?' '+esc(b.replace(/\s*·\w+$/,'')):''); };
+  const arenaFull=a=>{ const b=arenaBadge(a); return esc(a.sym)+(b?' ('+esc(b)+')':''); };
 
   if(arenas.length>1){
     const sw=el('div','cc-switch'); sw.style.margin='2px 0 10px';
     arenas.forEach(a=>{
-      const b=el('button', a.key===cur.key?'on':null, esc(a.sym)+' on '+esc(a.chainTag));
+      const b=el('button', a.key===cur.key?'on':null, arenaName(a)+' on '+esc(a.chainTag));
+      b.type='button';
       b.type='button';
       b.addEventListener('click',()=>{ cfg.arena=a.key; store.set('arena',a.key); renderAll(); });
       sw.append(b);
@@ -5232,26 +5245,29 @@ function renderCompetition(host){
   /* ---- 3. the arena as a whole ---- */
   function finish(){
   const riv=(cur.rivals||[]).filter(r=>r.tvlUsd!=null);
-  body.append(el('div','cmp-sub','THE WIDER MARKET — every '+esc(cur.sym)+' pool found on '+esc(cur.chainTag)));
+  body.append(el('div','cmp-sub','THE WIDER MARKET — every '+arenaFull(cur)+' pool found on '+esc(cur.chainTag)));
   if(!riv.length){
-    body.append(el('div','flow-omit','No other '+esc(cur.sym)+' pool could be sized right now.'));
+    body.append(el('div','flow-omit','No other '+arenaFull(cur)+' pool could be sized right now.'));
   }else{
     const sc=el('div','cat-scroll');
     const grid=el('div','cmp-mkt');
-    grid.style.gridTemplateColumns='minmax(max-content,1.4fr) minmax(60px,auto) minmax(80px,auto)';
-    grid.append(el('div','h','POOL'), el('div','h num','TVL'), el('div','h num','24H VOLUME'));
+    // a whole column of dashes is worse than no column: EVM pools have no volume figure here
+    const anyVol=riv.some(r=>r.vol24Usd!=null);
+    grid.style.gridTemplateColumns='minmax(max-content,1.4fr) minmax(60px,auto)'+(anyVol?' minmax(80px,auto)':'');
+    grid.append(el('div','h','POOL'), el('div','h num','TVL'));
+    if(anyVol) grid.append(el('div','h num','24H VOLUME'));
     for(const r of riv.slice(0,8)){
       grid.append(el('div',null, esc(r.pairLabel)+' <span class="feet">'+esc(r.feeLabel)+'</span> '
         +'<span class="unit">'+esc(r.venue||'')+'</span>'+(r.mine?' <span class="cmp-mine-tag">YOURS</span>':'')));
       grid.append(el('div','num', fmtUsd(r.tvlUsd,0)));
-      grid.append(el('div','num', r.vol24Usd!=null?fmtUsd(r.vol24Usd,0):'—'));
+      if(anyVol) grid.append(el('div','num', r.vol24Usd!=null?fmtUsd(r.vol24Usd,0):'—'));
     }
     sc.append(grid); body.append(sc);
     const more=(cur.rivalCount||0)-Math.min(8,riv.length);
     body.append(el('div','flow-omit',
       (cur.marketTvlUsd?'All of them together hold <b>'+fmtUsd(cur.marketTvlUsd,0)+'</b>, of which yours is <b>'
         +fmtUsd(cur.myTvlUsd,0)+'</b>'+(cur.tvlSharePct!=null?' — <b>'+cur.tvlSharePct.toFixed(cur.tvlSharePct<1?2:1)
-        +'%</b> of the capital chasing '+esc(cur.sym)+' on this chain':'')+'. ':'')
+        +'%</b> of the capital chasing '+arenaFull(cur)+' on this chain':'')+'. ':'')
       +(more>0?more+' smaller pool'+(more>1?'s':'')+' not listed. ':'')
       +'Scope: '+esc(cur.scope||'')+'. This column is capital, not depth — it counts money parked in ranges the '
       +'price is nowhere near, which is why it reads so differently from the share above.'));
