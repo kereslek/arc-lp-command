@@ -4,25 +4,25 @@
  "pos": {
   "1355331": {
    "m0": 16.59,
-   "last": 27.93,
-   "hwm": 28.01,
-   "acc": 11.42,
+   "last": 28.08,
+   "hwm": 28.08,
+   "acc": 11.49,
    "ck": "ethereum",
    "cat": "evm|LCX / ETH · wide"
   },
   "1355336": {
    "m0": 92.2,
-   "last": 126.93,
-   "hwm": 127.03,
-   "acc": 34.83,
+   "last": 127.61,
+   "hwm": 127.61,
+   "acc": 35.41,
    "ck": "ethereum",
    "cat": "evm|LCX / ETH · wide"
   },
   "1355918": {
    "m0": 40.62,
-   "last": 96.61,
-   "hwm": 96.7,
-   "acc": 56.08,
+   "last": 97.14,
+   "hwm": 97.14,
+   "acc": 56.52,
    "ck": "ethereum",
    "cat": "evm|LCX / ETH · wide"
   },
@@ -69,7 +69,7 @@
    }
   }
  ],
- "lastIl": -89.26,
+ "lastIl": -86.9,
  "catClosed": {},
- "readAt": 1788785730499
+ "readAt": 1788786925338
 }
