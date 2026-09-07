@@ -35,7 +35,11 @@ const CHAINS = {
 
 const CHAINLINK_ETH='0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419';
 const CHAINLINK_BTC='0xf4030086522a5beea4988f8ca5b36dba0d0f58a6';
-const SEL={positions:'0x99fbab88',ownerOf:'0x6352211e',getPool:'0x1698ee82',slot0:'0x3850c7bd',symbol:'0x95d89b41',decimals:'0x313ce567',latestAnswer:'0x50d25bcd',collect:'0xfc6f7865'};
+const SEL={positions:'0x99fbab88',ownerOf:'0x6352211e',getPool:'0x1698ee82',slot0:'0x3850c7bd',symbol:'0x95d89b41',decimals:'0x313ce567',latestAnswer:'0x50d25bcd',collect:'0xfc6f7865',
+  /* pool.liquidity(): the liquidity active AT THE CURRENT TICK, which is the denominator
+     every in-range position's fee share is divided by. Not the same thing as TVL — a pool
+     can hold millions parked in ranges the price is nowhere near. */
+  poolLiquidity:'0x1a686502', getPair:'0xe6a43905', getReserves:'0x0902f1ac'};
 const TOPIC_INC='0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f';
 const TOPIC_DEC='0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4';
 const TOPIC_COL='0x40d0efd1a53d60ecbf40971b9daf7dc90178c3aadc7aab1765632738fa8b8f01';
@@ -169,7 +173,7 @@ async function getLogsChunked(ck,filter,fromBlock,toBlock){
 /* persistent scan cache (committed with the other JSON ledgers):
    mint  — position id → mint block, found once by binary search, then never again
    tscan — wallet NFT-transfer scan checkpoint + candidate ids */
-let blockCache={mint:{},tscan:{},evh:{},mintInfo:{},tokMeta:{},depUsd:{},blkTs:{}};
+let blockCache={mint:{},tscan:{},evh:{},mintInfo:{},tokMeta:{},depUsd:{},blkTs:{},rivals:{}};
 /* Only an explicit revert proves "this id did not exist yet". Everything else — including
    phrasings we have never seen — is treated as "the node could not answer" and retried.
    The asymmetry is deliberate: over-calling infra costs one logged error and a recompute
@@ -274,6 +278,10 @@ async function fetchEvmPosition(ck,id,blockNum,ethUsd,btcUsd){
   let owner=null; try{ owner='0x'+(await evmCall(ck,C.npm,SEL.ownerOf+idHex)).slice(-40); }catch(e){}
   const [m0,m1]=[await meta(ck,token0),await meta(ck,token1)];
   const pool='0x'+(await evmCall(ck,C.factory,SEL.getPool+pad32(token0)+pad32(token1)+pad32(fee.toString(16)))).slice(-40);
+  // Everyone's liquidity standing at the current tick, this position's included — the figure
+  // that says what fraction of every swap fee lands here rather than with someone else.
+  let poolLiq=null;
+  try{ poolLiq=BigInt(await evmCall(ck,pool,SEL.poolLiquidity)); }catch(e){}
   const slot0=await evmCall(ck,pool,SEL.slot0);
   const sqrtPriceX96=BigInt(word(slot0,0));
   const tick=Number(toSigned(BigInt(word(slot0,1)),24));
@@ -450,7 +458,8 @@ async function fetchEvmPosition(ck,id,blockNum,ethUsd,btcUsd){
   const inRange=tick>=tickLower&&tick<tickUpper;
   const rangePos=(price-priceLower)/(priceUpper-priceLower); // linear price space (v19)
   const dLow=(price-priceLower)/price*100, dUp=(priceUpper-price)/price*100;
-  return { id, chain:ck, chainTag:C.tag, owner, relay:true, pool, token0, token1,
+  return { id, chain:ck, chainTag:C.tag, owner, relay:true, pool, token0, token1, feeTier:fee,
+    liq:liquidity.toString(), poolLiq:poolLiq!=null?poolLiq.toString():null,
     m0:{symbol:m0.symbol}, m1:{symbol:m1.symbol}, d0, d1, tick, price, priceLower, priceUpper,
     amt0, amt1, f0, f1, usd0, usd1, valueUsd, feesUsd, feesEverUsd, feesMonthStartUsd, opTxs, ilUsd, lpVsHodlUsd, hodlNowUsd, costUsd, roiPct, roiMode, feeAprPct, aprW, feeDbg, histPartial,
     mintTs, ageDays, inRange, rangePos, dLow, dUp,
@@ -525,7 +534,7 @@ const ORCA='whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc';
 const parseOrcaPosition=b=>({ whirlpool:pk(b,8), positionMint:pk(b,40), liquidity:leU128(b,72),
   tickLower:leI32(b,88), tickUpper:leI32(b,92),
   fgCheckA:leU128(b,96), feeOwedA:leU64(b,112), fgCheckB:leU128(b,120), feeOwedB:leU64(b,136) });
-const parseWhirlpool=b=>({ tickSpacing:leU16(b,41), feeRate:leU16(b,45), sqrtPriceX64:leU128(b,65),
+const parseWhirlpool=b=>({ tickSpacing:leU16(b,41), feeRate:leU16(b,45), liquidity:leU128(b,49), sqrtPriceX64:leU128(b,65),
   tickCurrent:leI32(b,81), mintA:pk(b,101), fgGlobalA:leU128(b,165), mintB:pk(b,181), fgGlobalB:leU128(b,245) });
 const TOKEN_PROG='TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN22='TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
@@ -703,6 +712,8 @@ async function fetchSolana(SOL_WALLETS){
       }catch(e){}
       out.push({ id:'sol:'+op.positionMint, chain:'sol', venue:'orca', relay:true, wallet:c.wallet,
         nftMint:op.positionMint, poolId:op.whirlpool, pda:pd,
+        mint0:w.mintA, mint1:w.mintB,
+        liq:op.liquidity.toString(), poolLiq:w.liquidity!=null?w.liquidity.toString():null,
         m0:{symbol:oSyms[w.mintA]}, m1:{symbol:oSyms[w.mintB]}, d0:dA, d1:dB, tick, price, priceLower, priceUpper,
         amt0:amtA, amt1:amtB, f0:fA, f1:fB, usd0:usdA, usd1:usdB,
         valueUsd:(usdA!=null&&usdB!=null)?amtA*usdA+amtB*usdB:null,
@@ -722,7 +733,10 @@ async function fetchSolana(SOL_WALLETS){
   const pools=new Map();
   const pr=await sol('getMultipleAccounts',[poolIds,{encoding:'base64'}]);
   pr.value.forEach((a,i)=>{ if(!a) return; const b=b64(a.data[0]);
-    pools.set(poolIds[i],{mint0:pk(b,73),mint1:pk(b,105),dec0:b[233],dec1:b[234],tickSpacing:leU16(b,235),sqrtPriceX64:leU128(b,253),tickCurrent:leI32(b,269),fgGlobal0:leU128(b,277),fgGlobal1:leU128(b,293)}); });
+    /* liquidity is the u128 between tickSpacing and sqrtPriceX64 — 237 + 16 = 253 lands exactly
+       on the sqrtPrice offset already validated against the SDK, which is the check that the
+       field is where it is claimed to be. Same reasoning for the Orca whirlpool: 49 + 16 = 65. */
+    pools.set(poolIds[i],{mint0:pk(b,73),mint1:pk(b,105),dec0:b[233],dec1:b[234],tickSpacing:leU16(b,235),liquidity:leU128(b,237),sqrtPriceX64:leU128(b,253),tickCurrent:leI32(b,269),fgGlobal0:leU128(b,277),fgGlobal1:leU128(b,293)}); });
   // ---- precise pending fees: tick-array fee growth (offsets validated vs Raydium SDK) ----
   const MASK128=(1n<<128n)-1n;
   const i32be=v=>{const bb=new Uint8Array(4);new DataView(bb.buffer).setInt32(0,v,false);return bb;};
@@ -778,7 +792,8 @@ async function fetchSolana(SOL_WALLETS){
   }
   let ray={}; try{
     const js=await getJson('https://api-v3.raydium.io/pools/info/ids?ids='+poolIds.join(','));
-    for(const d of (js.data||[])) if(d&&d.id) ray[d.id]={aprDay:d.day?.apr??null,aprWeek:d.week?.apr??null,aprMonth:d.month?.apr??null,feeRate:d.feeRate??null};
+    for(const d of (js.data||[])) if(d&&d.id) ray[d.id]={aprDay:d.day?.apr??null,aprWeek:d.week?.apr??null,aprMonth:d.month?.apr??null,feeRate:d.feeRate??null,
+      tvl:d.tvl??null, vol24:d.day?.volume??null};
   }catch(e){ logErr('raydium',e); }
   for(const {cat:c,pda:pd,pp} of found){
     const pool=pools.get(pp.poolId); if(!pool) continue;
@@ -811,6 +826,8 @@ async function fetchSolana(SOL_WALLETS){
     }catch(e){}
     const rinfo=ray[pp.poolId]||{};
     out.push({ id:'sol:'+pp.nftMint, chain:'sol', relay:true, wallet:c.wallet, nftMint:pp.nftMint, poolId:pp.poolId, pda:pd,
+      liq:pp.liquidity.toString(), poolLiq:pool.liquidity!=null?pool.liquidity.toString():null,
+      poolTvlUsd:rinfo.tvl??null, poolVol24Usd:rinfo.vol24??null,
       m0:{symbol:symbols[pool.mint0]}, m1:{symbol:symbols[pool.mint1]}, mint0:pool.mint0, mint1:pool.mint1, d0, d1, tick, price, priceLower, priceUpper,
       amt0, amt1, f0, f1, usd0, usd1,
       valueUsd:(usd0!=null&&usd1!=null)?amt0*usd0+amt1*usd1:null,
@@ -1044,6 +1061,191 @@ async function solCollectedSince(pos, sinceSig, costSink, ceil){
     }
   }catch(e){ out.err=String((e&&e.message)||e).slice(0,80); }
   return out;
+}
+
+/* ---------- competition: how much of the pool is mine, and who else is standing in it ----------
+
+   Two different questions, and conflating them is the usual mistake.
+
+   Inside a pool, fees are split strictly in proportion to liquidity standing at the price the
+   swap crosses. Not TVL — a pool can hold millions parked in ranges the price is nowhere near,
+   and that money earns nothing and takes nothing from you. pool.liquidity() on Uniswap v3, and
+   the equivalent field on a Raydium or Orca pool, is exactly the active total, so
+   myLiquidity / poolLiquidity is the real answer to "what fraction of every fee is mine",
+   readable on chain with no estimate anywhere in it.
+
+   Across pools, liquidity units are not comparable — they carry the pair's decimals and price
+   scale — so the wider market has to be sized in dollars instead. That is a weaker measure and
+   it is labelled as one: it says how much capital is chasing the same token, not how much of it
+   is standing where the price actually is.
+*/
+const EVM_QUOTES={ ethereum:[
+  ['0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2','WETH'],
+  ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48','USDC'],
+  ['0xdac17f958d2ee523a2206206994597c13d831ec7','USDT'],
+  ['0x6b175474e89094c44da98b954eedeac495271d0f','DAI'],
+  ['0x2260fac5e5542a773aa44fbcfedf7c193bc2c599','WBTC']] };
+const V3_FEES=[100,500,3000,10000];
+const V2_FACTORIES=[['0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f','Uniswap v2'],
+                    ['0xc0aee478e3658e2610c5f7a4a2e1777ce9e4f2ac','SushiSwap']];
+const RIVAL_TTL=6*3600000;   // which pools exist changes on the order of never
+
+async function evmSiblingPools(ck, focus){
+  const key=ck+':'+focus.toLowerCase();
+  const hit=blockCache.rivals[key];
+  if(hit && Date.now()-hit.at<RIVAL_TTL) return hit.pools;
+  const C=CHAINS[ck], pools=[];
+  const ZERO='0x0000000000000000000000000000000000000000';
+  for(const [q,qs] of (EVM_QUOTES[ck]||[])){
+    if(q.toLowerCase()===focus.toLowerCase()) continue;
+    for(const fee of V3_FEES){
+      try{
+        const a='0x'+(await evmCall(ck,C.factory,SEL.getPool+pad32(focus)+pad32(q)+pad32(fee.toString(16)))).slice(-40);
+        if(a!==ZERO) pools.push({addr:a, quote:q, quoteSym:qs, fee, venue:'Uniswap v3'});
+      }catch(e){}
+      await sleep(60);
+    }
+    for(const [fac,vname] of V2_FACTORIES){
+      try{
+        const a='0x'+(await evmCall(ck,fac,SEL.getPair+pad32(focus)+pad32(q))).slice(-40);
+        if(a!==ZERO) pools.push({addr:a, quote:q, quoteSym:qs, fee:3000, venue:vname, v2:true});
+      }catch(e){}
+      await sleep(60);
+    }
+  }
+  blockCache.rivals[key]={at:Date.now(), pools};
+  return pools;
+}
+
+async function buildCompetition(evmPositions, solPositions){
+  const arenas=[], notes=[];
+  const r2=x=>x==null?null:Math.round(x*100)/100;
+  /* ---------------- Ethereum and friends ---------------- */
+  const byFocus=new Map();
+  for(const p of (evmPositions||[])){
+    const ck=p.chain||'ethereum';
+    const qs=new Set((EVM_QUOTES[ck]||[]).map(x=>x[0]));
+    const focus=qs.has(String(p.token0).toLowerCase())?p.token1:p.token0;
+    const k=ck+':'+String(focus).toLowerCase();
+    const g=byFocus.get(k)||{ck, focus, sym:null, mine:[]};
+    g.sym=g.sym||(qs.has(String(p.token0).toLowerCase())?p.m1?.symbol:p.m0?.symbol);
+    g.mine.push(p); byFocus.set(k,g);
+  }
+  for(const [k,g] of byFocus){
+    try{
+      const C=CHAINS[g.ck];
+      // my positions, folded onto the pools they actually sit in
+      const pools=new Map();
+      for(const p of g.mine){
+        const e=pools.get(p.pool)||{addr:p.pool, pairLabel:p.pairLabel, feeLabel:p.feeLabel,
+          venue:'Uniswap v3', mine:0n, poolLiq:p.poolLiq!=null?BigInt(p.poolLiq):null,
+          myUsd:0, ids:[], outIds:[]};
+        // Only an in-range position stands in pool.liquidity(). One that has drifted out is
+        // not being diluted and is not diluting anyone — it simply is not in the fight.
+        if(p.inRange && p.liq) e.mine+=BigInt(p.liq);
+        else e.outIds.push(p.id);
+        e.myUsd+=(p.valueUsd||0);     // capital sits in the pool either way; only the share is in-range only
+        e.ids.push(p.id);
+        pools.set(p.pool,e);
+      }
+      const mineRows=[...pools.values()].map(e=>({
+        addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue,
+        ids:e.ids, outIds:e.outIds, myUsd:r2(e.myUsd),
+        myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
+        sharePct:(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null }));
+      // everyone else trading the same token on this chain
+      const sibs=await evmSiblingPools(g.ck, g.focus);
+      const want=[g.focus.toLowerCase(), ...new Set(sibs.map(x=>x.quote.toLowerCase()))];
+      await llamaPrices(want.map(a=>C.llama+':'+a));
+      const rows=[];
+      for(const sp of sibs){
+        try{
+          const bal=async t=>bigToFloat(BigInt(await evmCall(g.ck,t,SEL2.balanceOf+pad32(sp.addr))),(await meta(g.ck,t)).decimals);
+          const b0=await bal(g.focus), b1=await bal(sp.quote);
+          const p0=priceCache[C.llama+':'+g.focus.toLowerCase()], p1=priceCache[C.llama+':'+sp.quote.toLowerCase()];
+          const tvl=(p0!=null&&p1!=null)?b0*p0+b1*p1:null;
+          let liq=null;
+          if(!sp.v2){ try{ liq=BigInt(await evmCall(g.ck,sp.addr,SEL.poolLiquidity)).toString(); }catch(e){} }
+          if(tvl!=null && tvl<200) continue;         // an empty shell of a pool is not competition
+          rows.push({addr:sp.addr, venue:sp.venue, pairLabel:(g.sym||'?')+' / '+sp.quoteSym,
+                     feeLabel:sp.v2?'0.3%':(sp.fee/10000)+'%', tvlUsd:r2(tvl), poolLiq:liq, v2:!!sp.v2});
+        }catch(e){}
+        await sleep(60);
+      }
+      /* The scan finds the pools I am already in as well. They belong in the market total —
+         they are part of the market — but calling them competition would be nonsense. */
+      const minePools=new Set(mineRows.map(x=>String(x.addr).toLowerCase()));
+      for(const r of rows) if(minePools.has(String(r.addr).toLowerCase())) r.mine=true;
+      rows.sort((a,b)=>(b.tvlUsd??-1)-(a.tvlUsd??-1));
+      const myTvl=mineRows.reduce((s,x)=>s+(x.myUsd||0),0);
+      const mktTvl=rows.reduce((s,x)=>s+(x.tvlUsd||0),0);
+      arenas.push({key:k, chain:g.ck, chainTag:CHAINS[g.ck].tag, sym:g.sym||'?', token:g.focus,
+        scope:'Uniswap v3, Uniswap v2 and SushiSwap on '+CHAINS[g.ck].tag,
+        mine:mineRows, rivals:rows.slice(0,8), rivalCount:rows.length,
+        myTvlUsd:r2(myTvl), marketTvlUsd:r2(mktTvl),
+        tvlSharePct:mktTvl>0?r2(myTvl/mktTvl*100):null});
+    }catch(e){ logErr('competition '+k, e); }
+  }
+  /* ---------------- Solana ---------------- */
+  const solQ=new Set([SOL_MINT,'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v','Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']);
+  const solFocus=new Map();
+  for(const p of (solPositions||[])){
+    if(!p.mint0||!p.mint1) continue;
+    const focus=solQ.has(p.mint0)?p.mint1:p.mint0;
+    const sym=solQ.has(p.mint0)?p.m1?.symbol:p.m0?.symbol;
+    const g=solFocus.get(focus)||{focus, sym, mine:[]};
+    g.mine.push(p); solFocus.set(focus,g);
+  }
+  for(const [focus,g] of solFocus){
+    try{
+      const pools=new Map();
+      for(const p of g.mine){
+        const e=pools.get(p.poolId)||{addr:p.poolId, pairLabel:p.pairLabel, feeLabel:p.feeLabel,
+          venue:p.venue==='orca'?'Orca':'Raydium', mine:0n,
+          poolLiq:p.poolLiq!=null?BigInt(p.poolLiq):null, myUsd:0, ids:[], outIds:[],
+          tvlUsd:p.poolTvlUsd??null, vol24Usd:p.poolVol24Usd??null};
+        if(p.inRange && p.liq) e.mine+=BigInt(p.liq);
+        else e.outIds.push(p.id);
+        e.myUsd+=(p.valueUsd||0);
+        e.ids.push(p.id);
+        pools.set(p.poolId,e);
+      }
+      const mineRows=[...pools.values()].map(e=>({
+        addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue, ids:e.ids,
+        outIds:e.outIds, myUsd:r2(e.myUsd), tvlUsd:r2(e.tvlUsd), vol24Usd:r2(e.vol24Usd),
+        myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
+        sharePct:(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null }));
+      let rows=[], scope='Raydium pools on Solana';
+      const ck2='sol:'+focus, hit=blockCache.rivals[ck2];
+      if(hit && Date.now()-hit.at<RIVAL_TTL) rows=hit.pools;
+      else{
+        try{
+          const js=await getJson('https://api-v3.raydium.io/pools/info/mint?mint1='+focus
+            +'&poolType=all&poolSortField=liquidity&sortType=desc&pageSize=50&page=1', 20000);
+          // the ids endpoint answers {data:[...]}, the mint endpoint {data:{data:[...]}} — take
+          // whichever is actually an array rather than assuming one of them
+          const arr=Array.isArray(js?.data) ? js.data : (Array.isArray(js?.data?.data) ? js.data.data : []);
+          rows=arr.filter(d=>d&&d.id).map(d=>({addr:d.id, venue:'Raydium',
+            pairLabel:(d.mintA?.symbol||'?')+' / '+(d.mintB?.symbol||'?'),
+            feeLabel:d.feeRate!=null?r2(d.feeRate*100)+'%':'—',
+            tvlUsd:r2(d.tvl??null), vol24Usd:r2(d.day?.volume??null)}))
+            .filter(x=>x.tvlUsd==null||x.tvlUsd>=200)
+            .sort((a,b)=>(b.tvlUsd??-1)-(a.tvlUsd??-1));
+          blockCache.rivals[ck2]={at:Date.now(), pools:rows};
+        }catch(e){ logErr('rivalsSol',e); }
+      }
+      const minePoolsS=new Set(mineRows.map(x=>String(x.addr)));
+      for(const r of rows) if(minePoolsS.has(String(r.addr))) r.mine=true;
+      const myTvl=mineRows.reduce((s,x)=>s+(x.myUsd||0),0);
+      const mktTvl=rows.reduce((s,x)=>s+(x.tvlUsd||0),0);
+      arenas.push({key:'sol:'+focus, chain:'sol', chainTag:'SOL', sym:g.sym||'?', token:focus, scope,
+        mine:mineRows, rivals:rows.slice(0,8), rivalCount:rows.length,
+        myTvlUsd:r2(myTvl), marketTvlUsd:r2(mktTvl),
+        tvlSharePct:mktTvl>0?r2(myTvl/mktTvl*100):null});
+      if(rows.length) notes.push('The Solana market figure counts Raydium pools. An Orca or Meteora pool for the same token is not in it.');
+    }catch(e){ logErr('competition sol', e); }
+  }
+  return arenas.length ? {t:Date.now(), arenas, notes:[...new Set(notes)]} : null;
 }
 
 /* ---------- main ---------- */
@@ -2109,8 +2311,15 @@ const main=async()=>{
         if(Object.keys(chg).length) profilePxChg={from:baseDay.d, chg};
       }
     }catch(e){ logErr('daily',e); }
+    /* Last, and never allowed to take the payload down with it: this is context, not a figure
+       anything else is computed from. A chain that would not answer leaves the section absent,
+       which the panel renders as absent rather than as a zero share. */
+    let competition=null;
+    try{ competition=await buildCompetition(evmPositions, solPositions); }
+    catch(e){ logErr('competition', e); }
+
     const data={ v:6, t:Date.now(), profile:profile.slug, chainStatus, history, daily:profileDaily, pxChg:profilePxChg, uiBuild, feeMonth, costMonth, catMtd, catMonths, ethUsdChg24, tickers, block:blockNum, blocks:blockNums, ethUsd, btcUsd, gasGwei,
-      eth:evmPositions, sol:solPositions, topPools, idle, errors:[...errors] };
+      eth:evmPositions, sol:solPositions, topPools, idle, competition, errors:[...errors] };
     for(const p of data.eth) delete p.opTxs;   // internal bookkeeping — keep payload lean
     fs.writeFileSync(OUT+'/data-'+profile.slug+'.json', JSON.stringify(data));
     if(profile===CONFIG.profiles[0]) fs.writeFileSync(OUT+'/data.json', JSON.stringify(data));
