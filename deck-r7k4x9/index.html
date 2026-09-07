@@ -542,6 +542,24 @@
     gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px dashed var(--line-soft);font-size:12.5px}
   .cc-row.hdr{font-size:8.5px;letter-spacing:.14em;color:var(--text-muted);border-bottom:1px solid var(--line)}
   .cc-row .num{font-variant-numeric:tabular-nums;text-align:right}
+  .cmp-bar{position:relative;height:9px;background:var(--line);border-radius:1px;overflow:hidden;margin:4px 0 2px}
+  .cmp-bar i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px}
+  .cmp-pool{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:4px 14px;align-items:baseline;
+    padding:9px 0;border-bottom:1px solid var(--line-soft)}
+  .cmp-pool:last-of-type{border-bottom:0}
+  .cmp-share{font-size:19px;font-variant-numeric:tabular-nums;color:var(--text-primary);text-align:right}
+  .cmp-verdict{margin-top:10px;padding:10px 12px;border-left:2px solid var(--accent)}
+  .cmp-lines{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;font-size:12px;
+    font-variant-numeric:tabular-nums;margin-top:7px}
+  .cmp-lines .n{text-align:right;white-space:nowrap}
+  .cmp-lines .tot{border-top:1px solid var(--line-soft);padding-top:4px;margin-top:2px}
+  .cmp-mkt{display:grid;gap:4px 12px;align-items:baseline;font-size:12px;min-width:min-content}
+  .cmp-mkt .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .cmp-mkt .h{font-size:8.5px;letter-spacing:.16em;color:var(--text-muted);padding-bottom:3px;
+    border-bottom:1px solid var(--line);white-space:nowrap}
+  .cmp-mine-tag{color:var(--accent);font-size:9px;letter-spacing:.12em}
+  .cmp-sub{font-size:9px;letter-spacing:.18em;color:var(--text-muted);margin:14px 0 2px}
+  @media (max-width:760px){ .cmp-pool{grid-template-columns:1fr auto} }
   .cc-switch{display:flex;gap:0;border:1px solid var(--line);border-radius:2px;overflow:hidden}
   .cc-switch button{background:none;border:0;border-right:1px solid var(--line);color:var(--text-muted);
     font:inherit;font-size:9.5px;letter-spacing:.12em;padding:3px 9px;cursor:pointer}
@@ -998,7 +1016,7 @@ const store = {
 };
 
 /* ---------- config ---------- */
-const BUILD = 'v27.0';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
+const BUILD = 'v27.2';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
 const DEFAULT_IDS = [1344396, 1342410, 1344728, 1340238, 1344398];
 /* closed positions that moved to a new NFT — migrate stored pins once */
 const REPOSITIONED = {1338795: 1344396, 1339457: 1344398, 1340170: 1344728};
@@ -1815,6 +1833,11 @@ cfg.outlookWin = (v=>(v==='d7'||v==='d30')?v:'d30')(store.get('outlookWin','d30'
    have pointed in opposite directions on consecutive days. A week is the shortest window that
    settles, so it is the default. */
 cfg.ccWin = (v=>(v==='d1'||v==='d7'||v==='d30')?v:'d7')(store.get('ccWin','d7'));
+/* How much extra capital the "if you add more" block prices out. Round steps the reader can
+   scale in their head beat a slider they have to fiddle with before it says anything. */
+cfg.addSize = (v=>[1000,2500,5000,10000].includes(Number(v))?Number(v):2500)(store.get('addSize',2500));
+cfg.arena = store.get('arena','');
+cfg.addPool = store.get('addPool','');
 function aprOfWin(p,w){
   // partial = the fee history behind this number starts when tracking began, not when the
   // position opened (Solana has no fee event log). Annualised over the observed window.
@@ -1942,6 +1965,7 @@ function snapSave(){
       tickers:state.tickers, topPools:(state.topPools||[]).slice(0,25), history:(state.history||[]).slice(-600),
       idle:state.idle||prev.idle||null, idleAt:state.idleAt||prev.idleAt||null,
       catMtd:state.catMtd||prev.catMtd||null, catMonths:state.catMonths||prev.catMonths||null,
+      competition:state.competition||prev.competition||null,
       dayMoves:(state.dayMoves&&state.dayMoves.length?state.dayMoves:prev.dayMoves)||null,
       pxChg:state.pxChg||prev.pxChg||null,
       solIds, ethIds});
@@ -2071,6 +2095,7 @@ async function scanInner(isBoot){
           } else if(d.uiBuild){ state.staleBuild=null; }
           if(d.catMtd) state.catMtd=d.catMtd;
           if(Array.isArray(d.catMonths)) state.catMonths=d.catMonths;
+          if(d.competition) state.competition=d.competition;
           if(d.feeMonth) state.feeMonth = d.feeMonth;
           if(d.costMonth) state.costMonth = d.costMonth;
           if(d.tickers) state.tickers = d.tickers;
@@ -2173,6 +2198,7 @@ async function scanInner(isBoot){
         if(!state.pxChg && snap.pxChg) state.pxChg=snap.pxChg;
         if(!state.catMtd && snap.catMtd) state.catMtd=snap.catMtd;
         if(!(state.catMonths||[]).length && Array.isArray(snap.catMonths)) state.catMonths=snap.catMonths;
+        if(!state.competition && snap.competition) state.competition=snap.competition;
       }
     }catch(e){}
     if(state.mode!=='live' || state.loggedRpc!==state.lastRpc){
@@ -2214,6 +2240,7 @@ async function scanInner(isBoot){
       if(!state.pxChg && snap.pxChg) state.pxChg=snap.pxChg;
       state.catMtd=state.catMtd??snap.catMtd;
       state.catMonths=state.catMonths??snap.catMonths;
+      state.competition=state.competition??snap.competition;
       state.cacheAt=snap.t; state.dataAt=snap.t; state.mode='cache';
       setConn('cache');
       if(isBoot) log('warning','NO CONNECTION — showing the LAST KNOWN snapshot from '+Math.round((Date.now()-snap.t)/60000)+' min ago. Values are frozen, not live.');
@@ -4178,6 +4205,7 @@ function renderSpark(){
   renderMonths(host);
   renderCatSplit(host);
   renderContractCompare(host);
+  renderCompetition(host);
 }
 
 /* ================= PLAYBOOK =================
@@ -5002,6 +5030,203 @@ function poolLiquidity(p){
   if(fy==null) return fx;
   return (p.amt0*(p.usd0||0) >= p.amt1*(p.usd1||0)) ? fx : fy;
 }
+/* ================= COMPETITION =================
+   Two facts, and the difference between them is the whole section.
+
+   A pool splits its fees strictly by liquidity standing at the price a swap crosses. So the
+   only number that says what fraction of the fees is yours is yourLiquidity / poolLiquidity —
+   both read straight off the pool, no estimate in either. Pool TVL is a different and much
+   weaker thing: it counts capital parked in ranges the price is nowhere near, which earns
+   nothing and takes nothing from you.
+
+   And the question underneath it: does putting more in cost you? Fee revenue F is set by
+   volume, not by how much liquidity is chasing it. Hold l, others hold o, add D worth (which
+   at your own range buys d more liquidity) and your income goes from F·l/(l+o) to
+   F·(l+D)/(l+o+d). The extra works out at F·d·o/((l+o+d)(l+o)) against a naive F·d/(l+o) —
+   a ratio of o/(l+o+d), which is exactly one minus your share after the deposit.
+
+   So: you keep (1 − your new share) of the headline rate. At 1% of a pool that is 99 cents in
+   the dollar and the question does not arise. At 40% it is sixty, and the money you add is
+   mostly competing with money you already had in there. */
+function renderCompetition(host){
+  const C=state.competition;
+  if(!C || !Array.isArray(C.arenas) || !C.arenas.length) return;
+  const wrap=el('div','flow-block');
+  wrap.append(el('div','flow-title','HOW CROWDED ARE YOUR POOLS — and what adding more would really earn'));
+
+  const arenas=C.arenas.filter(a=>a && a.mine && a.mine.length);
+  if(!arenas.length) return;
+  let cur=arenas.find(a=>a.key===cfg.arena) || arenas[0];
+
+  if(arenas.length>1){
+    const sw=el('div','cc-switch'); sw.style.margin='2px 0 10px';
+    arenas.forEach(a=>{
+      const b=el('button', a.key===cur.key?'on':null, esc(a.sym)+' on '+esc(a.chainTag));
+      b.type='button';
+      b.addEventListener('click',()=>{ cfg.arena=a.key; store.set('arena',a.key); renderAll(); });
+      sw.append(b);
+    });
+    wrap.append(sw);
+  }
+
+  const body=el('div');
+  wrap.append(body);
+  const SIZES=[1000,2500,5000,10000];
+
+  /* ---- 1. your share of each pool you are actually in ---- */
+  body.append(el('div','cmp-sub','YOUR SHARE OF THE FEES — liquidity standing at today’s price'));
+  const withShare=[];
+  for(const m of cur.mine){
+    const row=el('div','cmp-pool');
+    const left=el('div');
+    left.append(el('div',null,'<b>'+esc(m.pairLabel)+'</b> <span class="feet">'+esc(m.feeLabel)+'</span>'
+      +' <span class="unit">'+esc(m.venue||'')+'</span>'));
+    const share=(m.sharePct!=null)?m.sharePct:null;
+    const bar=el('div','cmp-bar');
+    if(share!=null){ const i=el('i'); i.style.width=Math.max(0.4,Math.min(100,share))+'%'; bar.append(i); }
+    left.append(bar);
+    left.append(el('div','unit', m.poolLiq==null
+      ? 'the pool would not report its active liquidity, so no share can be given'
+      : 'your '+fmtUsd(m.myUsd,0)+' of capital'
+        +(m.tvlUsd?' · pool holds '+fmtUsd(m.tvlUsd,0):'')
+        +(m.outIds&&m.outIds.length?' · <span style="color:var(--status-warning)">'+m.outIds.length
+           +' position out of range, earning nothing and holding no share</span>':'')));
+    row.append(left);
+    row.append(el('div','cmp-share', share==null?'—':(share<0.1?share.toFixed(3):share.toFixed(share<10?2:1))+'%'));
+    body.append(row);
+    if(share!=null) withShare.push({m,share});
+  }
+
+  /* ---- 2. what another deposit would actually pay ---- */
+  /* Defaults to the pool you hold the largest share of, because that is where dilution bites
+     hardest and so where the answer is least obvious — but which pool you would actually top up
+     is your call, not mine, so it can be changed. */
+  const priceable=withShare.filter(x=>x.m.myUsd>0 && x.m.myLiq && BigInt(x.m.myLiq)>0n);
+  const ranked=priceable.slice().sort((a,b)=>b.share-a.share);
+  const top=ranked.find(x=>x.m.addr===cfg.addPool) || ranked[0];
+  if(top){
+    const m=top.m;
+    const head=el('div'); head.style.cssText='display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:16px';
+    head.append(el('div','cmp-sub','IF YOU ADD MORE'));
+    if(ranked.length>1){
+      const ps=el('div','cc-switch');
+      ranked.forEach(x=>{
+        const bb=el('button', x.m.addr===m.addr?'on':null, esc(x.m.pairLabel)+' '+esc(x.m.feeLabel));
+        bb.type='button';
+        bb.addEventListener('click',()=>{ cfg.addPool=x.m.addr; store.set('addPool',x.m.addr); renderAll(); });
+        ps.append(bb);
+      });
+      head.append(ps);
+    }
+    const sw=el('div','cc-switch');
+    SIZES.forEach(v=>{
+      const b=el('button', cfg.addSize===v?'on':null, '$'+(v/1000)+'k');
+      b.type='button';
+      b.title='Price out adding $'+v.toLocaleString('en')+' at this position\u2019s own range';
+      b.addEventListener('click',()=>{ cfg.addSize=v; store.set('addSize',v); renderAll(); });
+      sw.append(b);
+    });
+    head.append(sw);
+    body.append(head);
+    body.append(el('div','unit','into '+esc(m.pairLabel)+' '+esc(m.feeLabel)+', at that position’s own range'));
+
+    const D=cfg.addSize;
+    const l=Number(BigInt(m.myLiq)), P=Number(BigInt(m.poolLiq)), o=Math.max(0,P-l);
+    // at your own range, liquidity is linear in dollars, so D buys d = l·D/myUsd more of it
+    const d=(m.myUsd>0 && l>0) ? l*(D/m.myUsd) : 0;
+    const sNew=(l+d)/(l+o+d), keep=1-sNew, lost=l/(l+o+d);
+
+    // today's rate on this pool, from the positions that are in it
+    const ids=new Set(m.ids||[]);
+    let dayFee=0, haveRate=false;
+    for(const p of ordered()){
+      if(!ids.has(p.id)) continue;
+      const a=aprOfWin(p,'d1').v, base=p.valueUsd||p.costUsd;
+      if(a!=null && base){ dayFee+=a/100*base/365; haveRate=true; }
+    }
+    const rate=(haveRate && m.myUsd>0) ? dayFee/m.myUsd : null;   // $ per $ of capital per day
+
+    const g=el('div','cmp-lines');
+    const line=(k,v,cls)=>{ g.append(el('div',cls||null,k), el('div','n '+(cls||''),v)); };
+    const pc=v=>(v<0.1?v.toFixed(3):v.toFixed(2))+'%';
+    line('your share of this pool now', pc(top.share));
+    line('your share after adding '+fmtUsd(D,0), pc(sNew*100));
+    line('of the headline rate you keep', Math.round(keep*1000)/10+'%');
+    if(rate!=null){
+      /* The trap in this decomposition: naive x keep is ALREADY the net change, so the
+         cannibalisation must not come off it a second time. Split it honestly instead — what
+         the new money earns at the thinner rate, less what your existing stake gives up — and
+         those two differ by exactly naive x keep. */
+      const naive=D*rate;
+      const gross=naive*(l+o)/(l+o+d);     // the new money, earning at the post-deposit rate
+      const loss=naive*lost;               // what that same deposit takes off what you already hold
+      line('at today’s rate, '+fmtUsd(D,0)+' would naively earn', fmtUsd(naive,2)+' /day');
+      line('what the new money earns once the pool thins', fmtUsd(gross,2)+' /day');
+      line('what that costs your existing '+fmtUsd(m.myUsd,0), '−'+fmtUsd(loss,2)+' /day');
+      line('net change in your daily fee income', '<b>+'+fmtUsd(naive*keep,2)+' /day</b>', 'tot');
+      line('which annualises to', '<b>+'+fmtUsd(naive*keep*365,0)+'/yr</b> on '+fmtUsd(D,0), 'tot');
+    }
+    body.append(g);
+
+    /* Judged on the share you would hold AFTER the deposit, because that is the share the money
+       would actually earn at. The current share is quoted alongside it so the two are never
+       confused — they diverge fast in a pool you are already large in. */
+    const pct=sNew*100, was=top.share;
+    const at=v=>(v<0.1?v.toFixed(3):v.toFixed(v<10?2:1))+'%';
+    const verdict =
+      pct<2  ? 'A drop in the ocean. Adding '+fmtUsd(D,0)+' would take you from '+at(was)+' to '+at(pct)+' of this '
+               +'pool, so you stay a price-taker: essentially every fee the new money earns comes out of other LPs’ '
+               +'pockets, not your own. Size the deposit on what the pair is worth to you — crowding is not the '
+               +'constraint here.'
+      : pct<10 ? 'Small, but no longer nothing. You would go from '+at(was)+' to '+at(pct)+', and about '
+               +Math.round(was)+' cents of every dollar the new money earns is cancelled by what it takes off the '
+               +'position you already hold — that cancelled fraction is simply your share today. Still worth doing '
+               +'if the pair is worth being in.'
+      : pct<40 ? 'You are a real presence in this pool. '+at(was)+' now, '+at(pct)+' after — big enough that you '
+               +'move the rate by depositing, and about '+Math.round((1-keep)*100)+'% of what the headline rate '
+               +'promises never arrives. Splitting the money across pools, or across a second range, buys more than '
+               +'piling it in here.'
+      : 'You would be most of this pool. '+at(was)+' now, '+at(pct)+' after — at that size the new capital is mainly '
+        +'competing with capital you already own, and you keep only '+Math.round(keep*100)+' cents in the dollar of '
+        +'the rate on screen. What raises income from here is more volume through the pool, not more liquidity in it.';
+    const v=el('div','cmp-verdict');
+    v.append(el('div',null,verdict));
+    body.append(v);
+    body.append(el('div','flow-omit','Holding trading volume fixed, which is the honest assumption over a day or '
+      +'two: your deposit does not bring swaps with it. Deeper liquidity does mean less slippage, which over months '
+      +'can attract volume — that effect is real, slow, and not in these figures.'));
+  }
+
+  /* ---- 3. the arena as a whole ---- */
+  const riv=(cur.rivals||[]).filter(r=>r.tvlUsd!=null);
+  body.append(el('div','cmp-sub','THE WIDER MARKET — every '+esc(cur.sym)+' pool found on '+esc(cur.chainTag)));
+  if(!riv.length){
+    body.append(el('div','flow-omit','No other '+esc(cur.sym)+' pool could be sized right now.'));
+  }else{
+    const sc=el('div','cat-scroll');
+    const grid=el('div','cmp-mkt');
+    grid.style.gridTemplateColumns='minmax(max-content,1.4fr) minmax(60px,auto) minmax(80px,auto)';
+    grid.append(el('div','h','POOL'), el('div','h num','TVL'), el('div','h num','24H VOLUME'));
+    for(const r of riv.slice(0,8)){
+      grid.append(el('div',null, esc(r.pairLabel)+' <span class="feet">'+esc(r.feeLabel)+'</span> '
+        +'<span class="unit">'+esc(r.venue||'')+'</span>'+(r.mine?' <span class="cmp-mine-tag">YOURS</span>':'')));
+      grid.append(el('div','num', fmtUsd(r.tvlUsd,0)));
+      grid.append(el('div','num', r.vol24Usd!=null?fmtUsd(r.vol24Usd,0):'—'));
+    }
+    sc.append(grid); body.append(sc);
+    const more=(cur.rivalCount||0)-Math.min(8,riv.length);
+    body.append(el('div','flow-omit',
+      (cur.marketTvlUsd?'All of them together hold <b>'+fmtUsd(cur.marketTvlUsd,0)+'</b>, of which yours is <b>'
+        +fmtUsd(cur.myTvlUsd,0)+'</b>'+(cur.tvlSharePct!=null?' — <b>'+cur.tvlSharePct.toFixed(cur.tvlSharePct<1?2:1)
+        +'%</b> of the capital chasing '+esc(cur.sym)+' on this chain':'')+'. ':'')
+      +(more>0?more+' smaller pool'+(more>1?'s':'')+' not listed. ':'')
+      +'Scope: '+esc(cur.scope||'')+'. This column is capital, not depth — it counts money parked in ranges the '
+      +'price is nowhere near, which is why it reads so differently from the share above.'));
+  }
+  if((C.notes||[]).length) body.append(el('div','arch-note',C.notes.map(esc).join(' ')));
+  host.append(wrap);
+}
+
 function renderCatSplit(host){
   /* Whole dollars once a figure is big enough for a dollar to be noise, cents below that — a
      55c row rounded to "$1" reads as a dollar that was never earned. */
@@ -5819,6 +6044,7 @@ async function init(){
       if(d.costMonth) state.costMonth=d.costMonth;
       if(d.tickers) state.tickers=d.tickers;
       if(d.topPools) state.topPools=d.topPools;
+      if(d.competition) state.competition=d.competition;
       if(d.chainStatus) state.chainStatus=d.chainStatus;
       state.block=state.block??Number(d.block).toLocaleString();
       state.relayUsed=true; state.relayAt=d.t; state.dataAt=d.t; state.mode='live';
