@@ -5149,6 +5149,36 @@ function renderCompetition(host){
     const g=el('div','cmp-lines');
     const line=(k,v,cls)=>{ g.append(el('div',cls||null,k), el('div','n '+(cls||''),v)); };
     const pc=v=>(v<0.1?v.toFixed(3):v.toFixed(2))+'%';
+    /* The case this portfolio is actually in, and the general arithmetic answers it correctly
+       but reads like a rounding artefact: with nobody else in range, o is zero, so keep is zero
+       and every dollar line lands on 0.00. That is the true answer — you already receive every
+       fee the pool produces, and more liquidity cannot increase a total you are already taking
+       all of — but it has to be said in words rather than left as a column of zeros. */
+    const sole = o<=0 || top.share>=99.5;
+    if(sole){
+      line('you are the only liquidity at this price, so you take', '<b>100%</b> of this pool’s fees');
+      if(rate!=null){
+        const now=rate*1000, after=(dayFee/(m.myUsd+D))*1000;
+        line('which today is', fmtUsd(dayFee,2)+' /day on '+fmtUsd(m.myUsd,0));
+        line('adding '+fmtUsd(D,0)+' would earn', '<b>+'+fmtUsd(0,2)+' /day</b>', 'tot');
+        line('but your rate per $1,000 would fall', fmtUsd(now,2)+' → '+fmtUsd(after,2)+' /day');
+        line('and taking '+fmtUsd(Math.min(D,m.myUsd*0.5),0)+' back out would raise it to',
+             fmtUsd(dayFee/Math.max(1,m.myUsd-Math.min(D,m.myUsd*0.5))*1000,2)+' /day');
+      }
+      body.append(g);
+      const v0=el('div','cmp-verdict');
+      v0.append(el('div',null,'There is no competition in this pool — at today’s price you are all of it. '
+        +'Every fee it generates is already yours, so adding liquidity cannot raise your fee income by a cent; '
+        +'it spreads the same fees over more of your own capital and cuts your rate per dollar one for one. '
+        +'The levers here are volume through the pool, and a tighter range so the same money stands in front of '
+        +'more of the flow. The mirror of that is worth knowing too: while you are the only one in range, '
+        +'withdrawing capital does not cost you fee dollars at all — it raises your rate per dollar.'));
+      body.append(v0);
+      body.append(el('div','flow-omit','With one caveat in the other direction: thinner liquidity means more '
+        +'price impact per trade, and a trader who gets a worse fill may route elsewhere next time. That feeds '
+        +'back into volume, slowly, and is not in these figures.'));
+      return finish();
+    }
     line('your share of this pool now', pc(top.share));
     line('your share after adding '+fmtUsd(D,0), pc(sNew*100));
     line('of the headline rate you keep', Math.round(keep*1000)/10+'%');
@@ -5197,7 +5227,10 @@ function renderCompetition(host){
       +'can attract volume — that effect is real, slow, and not in these figures.'));
   }
 
+  finish();
+
   /* ---- 3. the arena as a whole ---- */
+  function finish(){
   const riv=(cur.rivals||[]).filter(r=>r.tvlUsd!=null);
   body.append(el('div','cmp-sub','THE WIDER MARKET — every '+esc(cur.sym)+' pool found on '+esc(cur.chainTag)));
   if(!riv.length){
@@ -5225,6 +5258,7 @@ function renderCompetition(host){
   }
   if((C.notes||[]).length) body.append(el('div','arch-note',C.notes.map(esc).join(' ')));
   host.append(wrap);
+  }
 }
 
 function renderCatSplit(host){

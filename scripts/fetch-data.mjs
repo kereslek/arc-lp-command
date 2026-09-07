@@ -173,7 +173,11 @@ async function getLogsChunked(ck,filter,fromBlock,toBlock){
 /* persistent scan cache (committed with the other JSON ledgers):
    mint  — position id → mint block, found once by binary search, then never again
    tscan — wallet NFT-transfer scan checkpoint + candidate ids */
-let blockCache={mint:{},tscan:{},evh:{},mintInfo:{},tokMeta:{},depUsd:{},blkTs:{},rivals:{}};
+/* One list, so a cache added here cannot be silently dropped by the loader. Adding a key to
+   the initialiser and forgetting the loader's hand-written pick is exactly how `rivals` came
+   back undefined on the first real run and took the whole competition block down with it. */
+const BC_KEYS=['mint','tscan','evh','mintInfo','tokMeta','depUsd','blkTs','rivals'];
+let blockCache=Object.fromEntries(BC_KEYS.map(k=>[k,{}]));
 /* Only an explicit revert proves "this id did not exist yet". Everything else — including
    phrasings we have never seen — is treated as "the node could not answer" and retried.
    The asymmetry is deliberate: over-calling infra costs one logged error and a recompute
@@ -1091,6 +1095,7 @@ const V2_FACTORIES=[['0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f','Uniswap v2'],
 const RIVAL_TTL=6*3600000;   // which pools exist changes on the order of never
 
 async function evmSiblingPools(ck, focus){
+  blockCache.rivals=blockCache.rivals||{};
   const key=ck+':'+focus.toLowerCase();
   const hit=blockCache.rivals[key];
   if(hit && Date.now()-hit.at<RIVAL_TTL) return hit.pools;
@@ -1216,6 +1221,7 @@ async function buildCompetition(evmPositions, solPositions){
         myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
         sharePct:(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null }));
       let rows=[], scope='Raydium pools on Solana';
+      blockCache.rivals=blockCache.rivals||{};
       const ck2='sol:'+focus, hit=blockCache.rivals[ck2];
       if(hit && Date.now()-hit.at<RIVAL_TTL) rows=hit.pools;
       else{
@@ -1325,7 +1331,8 @@ function readUiBuild(){
   }catch(e){ return null; }
 }
 const main=async()=>{
-  try{ const bc=JSON.parse(fs.readFileSync(OUT+'/blockcache.json','utf8')); blockCache={mint:bc.mint||{},tscan:bc.tscan||{},evh:bc.evh||{},mintInfo:bc.mintInfo||{},tokMeta:bc.tokMeta||{},depUsd:bc.depUsd||{},blkTs:bc.blkTs||{}}; }catch(e){}
+  try{ const bc=JSON.parse(fs.readFileSync(OUT+'/blockcache.json','utf8'));
+       blockCache=Object.fromEntries(BC_KEYS.map(k=>[k, (bc&&bc[k])||{}])); }catch(e){}
   const blockNums={};
   for(const ck in CHAINS){ try{ blockNums[ck]=Number(BigInt(await evm(ck,'eth_blockNumber',[]))); }catch(e){ logErr('block '+ck,e); } }
   const blockNum=blockNums.ethereum;
