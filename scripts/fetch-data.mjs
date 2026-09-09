@@ -176,7 +176,7 @@ async function getLogsChunked(ck,filter,fromBlock,toBlock){
 /* One list, so a cache added here cannot be silently dropped by the loader. Adding a key to
    the initialiser and forgetting the loader's hand-written pick is exactly how `rivals` came
    back undefined on the first real run and took the whole competition block down with it. */
-const BC_KEYS=['mint','tscan','evh','mintInfo','tokMeta','depUsd','blkTs','rivals'];
+const BC_KEYS=['mint','tscan','evh','mintInfo','tokMeta','depUsd','blkTs','rivals','shareHist'];
 let blockCache=Object.fromEntries(BC_KEYS.map(k=>[k,{}]));
 /* Only an explicit revert proves "this id did not exist yet". Everything else — including
    phrasings we have never seen — is treated as "the node could not answer" and retried.
@@ -1094,6 +1094,24 @@ const V2_FACTORIES=[['0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f','Uniswap v2'],
                     ['0xc0aee478e3658e2610c5f7a4a2e1777ce9e4f2ac','SushiSwap']];
 const RIVAL_TTL=6*3600000;   // which pools exist changes on the order of never
 
+/* A share is a reading, not a property, and the difference is not academic: on the old LCX
+   contract this portfolio's share went 7.4% -> 36.5% -> 4.2% inside thirty-three hours without
+   the position changing at all. Active liquidity is a step function of the tick, so every time
+   the price crosses somebody else's range boundary the denominator jumps. Reporting the instant
+   alone invites exactly the wrong conclusion, so the range it has actually occupied is kept
+   alongside it. A pool where the figure never moves while the price travels is saying something
+   quite different from one where it swings ninefold, and the reader should be able to tell. */
+const SHARE_KEEP=700;        // ~7 days at a quarter-hour cadence
+function recordShare(key, pct){
+  if(pct==null) return null;
+  blockCache.shareHist=blockCache.shareHist||{};
+  const h=blockCache.shareHist[key]=[...(blockCache.shareHist[key]||[]), {t:Date.now(), s:Math.round(pct*1e4)/1e4}]
+    .slice(-SHARE_KEEP);
+  const v=h.map(x=>x.s);
+  return { n:h.length, min:Math.min(...v), max:Math.max(...v),
+           days:Math.round((Date.now()-h[0].t)/86400000*100)/100 };
+}
+
 async function evmSiblingPools(ck, focus){
   blockCache.rivals=blockCache.rivals||{};
   const key=ck+':'+focus.toLowerCase();
@@ -1153,11 +1171,12 @@ async function buildCompetition(evmPositions, solPositions){
         e.ids.push(p.id);
         pools.set(p.pool,e);
       }
-      const mineRows=[...pools.values()].map(e=>({
-        addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue,
-        ids:e.ids, outIds:e.outIds, myUsd:r2(e.myUsd),
-        myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
-        sharePct:(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null }));
+      const mineRows=[...pools.values()].map(e=>{
+        const sp=(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null;
+        return { addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue,
+          ids:e.ids, outIds:e.outIds, myUsd:r2(e.myUsd),
+          myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
+          sharePct:sp, shareSeen:recordShare(g.ck+':'+e.addr, sp) }; });
       // everyone else trading the same token on this chain
       const sibs=await evmSiblingPools(g.ck, g.focus);
       const want=[g.focus.toLowerCase(), ...new Set(sibs.map(x=>x.quote.toLowerCase()))];
@@ -1215,11 +1234,12 @@ async function buildCompetition(evmPositions, solPositions){
         e.ids.push(p.id);
         pools.set(p.poolId,e);
       }
-      const mineRows=[...pools.values()].map(e=>({
-        addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue, ids:e.ids,
-        outIds:e.outIds, myUsd:r2(e.myUsd), tvlUsd:r2(e.tvlUsd), vol24Usd:r2(e.vol24Usd),
-        myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
-        sharePct:(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null }));
+      const mineRows=[...pools.values()].map(e=>{
+        const sp=(e.poolLiq&&e.poolLiq>0n)?Number(e.mine*1000000n/e.poolLiq)/10000:null;
+        return { addr:e.addr, pairLabel:e.pairLabel, feeLabel:e.feeLabel, venue:e.venue, ids:e.ids,
+          outIds:e.outIds, myUsd:r2(e.myUsd), tvlUsd:r2(e.tvlUsd), vol24Usd:r2(e.vol24Usd),
+          myLiq:e.mine.toString(), poolLiq:e.poolLiq!=null?e.poolLiq.toString():null,
+          sharePct:sp, shareSeen:recordShare('sol:'+e.addr, sp) }; });
       let rows=[], scope='Raydium pools on Solana';
       blockCache.rivals=blockCache.rivals||{};
       const ck2='sol:'+focus, hit=blockCache.rivals[ck2];
