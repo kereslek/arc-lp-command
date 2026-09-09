@@ -12,23 +12,23 @@
   },
   "1355336": {
    "m0": 92.2,
-   "last": 148,
-   "hwm": 148,
-   "acc": 55.8,
+   "last": 148.01,
+   "hwm": 148.01,
+   "acc": 55.81,
    "ck": "ethereum",
    "cat": "evm|LCX / ETH · wide"
   },
   "1355918": {
    "m0": 40.62,
-   "last": 130.52,
-   "hwm": 130.52,
-   "acc": 89.9,
+   "last": 130.53,
+   "hwm": 130.53,
+   "acc": 89.91,
    "ck": "ethereum",
    "cat": "evm|LCX / ETH · wide"
   },
   "sol:4j7pUWRaejEA5SyCg71MqGAU3A3WxvNeH5AQAbmkB2EM": {
    "m0": 303.88,
-   "last": 337.09,
+   "last": 337.1,
    "acc": 33.28,
    "hwm": 337.16,
    "cat": "sol|SOL / CPOOL · wide"
@@ -69,7 +69,7 @@
    }
   }
  ],
- "lastIl": -84.59,
+ "lastIl": -84.66,
  "catClosed": {},
- "readAt": 1788959048309
+ "readAt": 1788960084683
 }
