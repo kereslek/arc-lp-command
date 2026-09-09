@@ -1016,7 +1016,7 @@ const store = {
 };
 
 /* ---------- config ---------- */
-const BUILD = 'v27.4';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
+const BUILD = 'v27.5';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
 const DEFAULT_IDS = [1344396, 1342410, 1344728, 1340238, 1344398];
 /* closed positions that moved to a new NFT — migrate stored pins once */
 const REPOSITIONED = {1338795: 1344396, 1339457: 1344398, 1340170: 1344728};
@@ -4757,40 +4757,84 @@ function renderDaily(host){
         +'move for those. Price and capital are still split correctly; only the finer breakdown is coarse.'));
   }
 
-  // ---- the recent run of days ----
+  /* ---- the run of months ----
+     A fortnight of day rows is a lot of scrolling for a question nobody asks day by day once the
+     day in question has passed. The daily records are still what everything is computed from —
+     the itemised move above is one of them — but the trailing history is rolled up.
+
+     The roll-up is a chain, not a re-derivation: each record's change is measured against the
+     record before it, so summing them across a month gives the move from the last reading of the
+     previous month to the last of this one, which is what a month's change means. Token
+     contributions sum in dollars for the same reason. Percentages compound rather than sum,
+     because a price that rises 10% twice has risen 21%, not 20%. */
+  const MN=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  const mlab=k=>MN[Number(String(k).slice(5,7))-1]+' ’'+String(k).slice(2,4);
+  const months=new Map();
+  for(const r of rows){                       // newest first, so the first row of a month is its end
+    const k=String(r.d).slice(0,7);
+    const g=months.get(k)||{k, endV:r.v, endD:r.d, startD:r.d, dV:0, rebal:0, flow:0,
+                            tok:new Map(), opened:[], closed:[], n:0, noDetail:0};
+    g.startD=r.d;    // rows run newest first, so the last one seen in a month is its start
+    g.dV+=(r.dV||0); g.rebal+=(r.rebal||0); g.flow+=(r.flow||0); g.n++;
+    if(r.noDetail) g.noDetail++;
+    for(const tk of (r.tokens||[])){
+      const lbl=tk.lbl||tk.s;
+      const e=g.tok.get(lbl)||{lbl, usd:0, mul:1, days:0};
+      e.usd+=(tk.usd||0);
+      if(tk.pct!=null){ e.mul*=(1+tk.pct/100); e.days++; }
+      g.tok.set(lbl,e);
+    }
+    for(const o of (r.opened||[])) g.opened.push(o);
+    for(const c of (r.closed||[])) g.closed.push(c);
+    months.set(k,g);
+  }
+  const mrows=[...months.values()];
+  const curM=new Date().toISOString().slice(0,7);
   const hdr=el('div','dod-row hdr');
-  ['DAY','VALUE','CHANGE','WHAT MOVED IT'].forEach(h=>hdr.append(el('div',null,h)));
+  ['MONTH','VALUE AT END','CHANGE','WHAT MOVED IT'].forEach(h=>hdr.append(el('div',null,h)));
   wrap.append(hdr);
   const cell=(cls,html,label)=>{ const d=el('div',cls,html); if(label) d.setAttribute('data-l',label); return d; };
-  for(const r of rows.slice(0,14)){
+  for(const g of mrows){
+    const live=g.k===curM;
     const row=el('div','dod-row');
-    row.append(cell(null,'<b>'+dlab(r.d)+'</b>'));
-    row.append(cell('num',fmtUsd(r.v,0),'VALUE'));
-    row.append(cell('num',sgn(r.dV,0),'CHANGE'));   // the run of days is for scanning, not reconciling
-    if(r.noDetail){
+    /* The span, not just the count: only 35 daily records are kept, so August is covered from
+       the 6th onward and its change is the move across those days rather than across the month.
+       Printing the window is the difference between a figure and a misread one. */
+    const dnum=x=>Number(String(x).slice(8,10));
+    row.append(cell(null,'<b>'+mlab(g.k)+'</b>'
+      +(live?' <span style="color:var(--accent);font-size:9px">SO FAR</span>':'')
+      +' <span class="dim">'+dnum(g.startD)+'–'+dnum(g.endD)+' · '+g.n+' day'+(g.n>1?'s':'')+'</span>'));
+    row.append(cell('num',fmtUsd(g.endV,0),'VALUE AT END'));
+    row.append(cell('num',sgn(g.dV,0),'CHANGE'));
+    if(g.noDetail===g.n){
       row.append(cell('why','<span class="dim">recorded before per-position tracking — total only</span>','WHAT MOVED IT'));
       wrap.append(row); continue;
     }
-    /* Name the drivers that actually carried the day rather than listing every token: anything
+    /* Name the drivers that actually carried the month rather than listing every token: anything
        under a fifth of the move is noise a reader has to filter out themselves. */
-    const parts=[], floor=Math.max(1, Math.abs(r.dV)*0.2);
-    for(const tk of (r.tokens||[]))
-      if(Math.abs(tk.usd) >= floor)
-        parts.push(esc(tk.lbl||tk.s)+' '+(tk.pct!=null?(tk.pct>=0?'+':'−')+Math.abs(tk.pct).toFixed(1)+'%':'')
+    const parts=[], floor=Math.max(1, Math.abs(g.dV)*0.2);
+    const toks=[...g.tok.values()].sort((x,z)=>Math.abs(z.usd)-Math.abs(x.usd));
+    for(const tk of toks)
+      if(Math.abs(tk.usd) >= floor){
+        const pc=tk.days?(tk.mul-1)*100:null;
+        parts.push(esc(tk.lbl)+(pc!=null?' '+(pc>=0?'+':'−')+Math.abs(pc).toFixed(1)+'%':'')
           +' ('+(tk.usd>=0?'+':'−')+fmtUsd(Math.abs(tk.usd),0)+')');
-    if(Math.abs(r.rebal||0) >= floor)
-      parts.push('range rebalancing '+(r.rebal>=0?'+':'−')+fmtUsd(Math.abs(r.rebal),0));
-    if(Math.abs(r.flow||0) >= floor)
-      parts.push((r.flow>=0?'deposits +':'withdrawals −')+fmtUsd(Math.abs(r.flow),0));
-    for(const o of (r.opened||[])) parts.push('opened '+esc(String(o.n))+' (+'+fmtUsd(o.usd,0)+')');
-    for(const c of (r.closed||[])) parts.push('closed '+esc(String(c.n))+' (−'+fmtUsd(Math.abs(c.usd),0)+')');
+      }
+    if(Math.abs(g.rebal) >= floor)
+      parts.push('range rebalancing '+(g.rebal>=0?'+':'−')+fmtUsd(Math.abs(g.rebal),0));
+    if(Math.abs(g.flow) >= floor)
+      parts.push((g.flow>=0?'deposits +':'withdrawals −')+fmtUsd(Math.abs(g.flow),0));
+    if(g.opened.length) parts.push(g.opened.length+' LP'+(g.opened.length>1?'s':'')+' opened (+'
+      +fmtUsd(g.opened.reduce((s2,o)=>s2+(o.usd||0),0),0)+')');
+    if(g.closed.length) parts.push(g.closed.length+' LP'+(g.closed.length>1?'s':'')+' closed (−'
+      +fmtUsd(Math.abs(g.closed.reduce((s2,c)=>s2+(c.usd||0),0)),0)+')');
     row.append(cell('why', parts.length?parts.join(' · '):'<span class="dim">nothing moved enough to name</span>','WHAT MOVED IT'));
     wrap.append(row);
   }
-  wrap.append(el('div','arch-note','Each row compares one daily record with the one before it, so a day the relay '
-    +'could not complete is skipped rather than reported as positions closing. Token lines are the move a plain '
-    +'holder of that day\'s balances would also have taken; range rebalancing is what the concentrated ranges did '
-    +'on top, by selling into strength and buying into weakness.'));
+  wrap.append(el('div','arch-note','Each month chains the daily records inside it, so a day the relay could not '
+    +'complete is skipped rather than reported as positions closing. Token lines are the move a plain holder of '
+    +'those balances would also have taken, compounded across the month; range rebalancing is what the '
+    +'concentrated ranges did on top, by selling into strength and buying into weakness.'));
   host.append(wrap);
 }
 
