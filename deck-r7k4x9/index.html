@@ -1016,7 +1016,7 @@ const store = {
 };
 
 /* ---------- config ---------- */
-const BUILD = 'v27.3';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
+const BUILD = 'v27.4';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
 const DEFAULT_IDS = [1344396, 1342410, 1344728, 1340238, 1344398];
 /* closed positions that moved to a new NFT — migrate stored pins once */
 const REPOSITIONED = {1338795: 1344396, 1339457: 1344398, 1340170: 1344728};
@@ -5098,12 +5098,23 @@ function renderCompetition(host){
     const bar=el('div','cmp-bar');
     if(share!=null){ const i=el('i'); i.style.width=Math.max(0.4,Math.min(100,share))+'%'; bar.append(i); }
     left.append(bar);
+    /* The share as of this instant, and the band it has actually occupied. Active liquidity is a
+       step function of the tick, so a share can move ninefold without the position changing —
+       showing only the instant invites the reader to treat a reading as a property. */
+    const sn=m.shareSeen;
+    const swing = (sn && sn.n>=8 && sn.max>0 && sn.max/Math.max(sn.min,1e-9)>1.25)
+      ? ' · has ranged <b>'+sn.min.toFixed(sn.min<10?2:1)+'%–'+sn.max.toFixed(sn.max<10?2:1)+'%</b> over '
+        +(sn.days>=1?sn.days.toFixed(1)+' days':Math.round(sn.days*24)+'h')+' as the price crossed other LPs’ ranges'
+      : (sn && sn.n>=8 && sn.max-sn.min<0.005
+        ? ' · unchanged across '+sn.n+' readings'+(sn.days>=0.5?' over '+(sn.days>=1?sn.days.toFixed(1)+' days':Math.round(sn.days*24)+'h'):'')
+        : '');
     left.append(el('div','unit', m.poolLiq==null
       ? 'the pool would not report its active liquidity, so no share can be given'
       : 'your '+fmtUsd(m.myUsd,0)+' of capital'
         +(m.tvlUsd?' · pool holds '+fmtUsd(m.tvlUsd,0):'')
         +(m.outIds&&m.outIds.length?' · <span style="color:var(--status-warning)">'+m.outIds.length
-           +' position out of range, earning nothing and holding no share</span>':'')));
+           +' position out of range, earning nothing and holding no share</span>':'')
+        +swing));
     row.append(left);
     row.append(el('div','cmp-share', share==null?'—':(share<0.1?share.toFixed(3):share.toFixed(share<10?2:1))+'%'));
     body.append(row);
@@ -5193,6 +5204,9 @@ function renderCompetition(host){
       return finish();
     }
     line('your share of this pool now', pc(top.share));
+    if(m.shareSeen && m.shareSeen.n>=8 && m.shareSeen.max/Math.max(m.shareSeen.min,1e-9)>1.25)
+      line('though it has ranged', pc(m.shareSeen.min)+' – '+pc(m.shareSeen.max)
+        +' <span class="unit">over '+(m.shareSeen.days>=1?m.shareSeen.days.toFixed(1)+'d':Math.round(m.shareSeen.days*24)+'h')+'</span>');
     line('your share after adding '+fmtUsd(D,0), pc(sNew*100));
     line('of the headline rate you keep', Math.round(keep*1000)/10+'%');
     if(rate!=null){
