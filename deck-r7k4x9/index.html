@@ -1016,7 +1016,7 @@ const store = {
 };
 
 /* ---------- config ---------- */
-const BUILD = 'v27.5';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
+const BUILD = 'v27.6';   // bump on every deploy: a fixed stamp cannot reveal a stale cache
 const DEFAULT_IDS = [1344396, 1342410, 1344728, 1340238, 1344398];
 /* closed positions that moved to a new NFT — migrate stored pins once */
 const REPOSITIONED = {1338795: 1344396, 1339457: 1344398, 1340170: 1344728};
@@ -2583,7 +2583,14 @@ function renderTiles(){
   { const topFee = ps.filter(p=>p.feesUsd!=null).sort((a,b)=>b.feesUsd-a.feesUsd)[0];
     mk('UNCLAIMED FEES', inc(fmtUsd(totalFees)),
        (partial ? partial+' · ' : '')
-       +(topFee&&topFee.feesUsd>0 ? 'top: <b>'+esc(topFee.pairLabel)+' '+esc(posRef(topFee))+' · '+fmtUsd(topFee.feesUsd)+'</b> · ' : '')+'lifetime: <b>'+fmtUsd(totalEver,0)+'</b>'); }
+       +(topFee&&topFee.feesUsd>0 ? 'top: <b>'+esc(topFee.pairLabel)+' '+esc(posRef(topFee))+' · '+fmtUsd(topFee.feesUsd)+'</b> · ' : '')
+       +'lifetime: <b>'+fmtUsd(totalEver,0)+'</b>'
+       /* The tile gives a total and the single largest holder of it. The per-LP split lives in
+          the matrix, so link straight to it — and land on it sorted by that column, because
+          arriving at a table sorted by something else leaves the reader to find the breakdown
+          they just asked for. */
+       +' <span class="unit">·</span> <button type="button" class="tile-why" data-jump="matrix"'
+       +' data-sort="feesUsd">per-LP breakdown</button>'); }
   { const fm=state.feeMonth;
     const MN=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
     const mName=fm?MN[Number(fm.month.slice(5,7))-1]:MN[new Date().getUTCMonth()];
@@ -5581,6 +5588,14 @@ document.addEventListener('click', e=>{
   const p=document.querySelector('.panel[data-panel="'+b.getAttribute('data-jump')+'"]');
   if(!p) return;
   p.classList.remove('collapsed');
+  /* A jump can ask for the destination to be ordered by the column it is about. Only a real
+     matrix column is accepted, so a stale attribute cannot leave the table sorted by nothing. */
+  const sk=b.getAttribute('data-sort');
+  if(sk && typeof MATRIX_COLS!=='undefined' && MATRIX_COLS.some(c=>c.key===sk)){
+    matrixSort={key:sk, dir:-1};
+    store.set('matrixSort', matrixSort);
+    try{ renderMatrix(); }catch(err){}
+  }
   const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
   try{ p.scrollIntoView({behavior:reduce?'auto':'smooth', block:'start'}); }
   catch(err){ p.scrollIntoView(); }
